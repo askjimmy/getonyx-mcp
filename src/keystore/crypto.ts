@@ -98,11 +98,17 @@ export async function decryptWithPassword(
   const ciphertext = raw.subarray(SALT_LENGTH + IV_LENGTH);
 
   const key = await deriveKey(password, salt);
-  const plaintext = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv },
-    key,
-    ciphertext,
-  );
+  let plaintext: ArrayBuffer;
+  try {
+    plaintext = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv },
+      key,
+      ciphertext,
+    );
+  } catch {
+    // AES-GCM tag mismatch: wrong password or tampered payload.
+    throw new Error('Invalid password or corrupted keystore entry');
+  }
 
   return new TextDecoder().decode(plaintext);
 }
