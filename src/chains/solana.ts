@@ -86,7 +86,7 @@ export class SolanaWallet implements ChainWallet {
   async getBalance(address: string): Promise<string> {
     const pubkey = new PublicKey(address);
     const lamports = await this.connection.getBalance(pubkey);
-    return (lamports / 1e9).toString();
+    return (lamports / 10 ** this.config.decimals).toString();
   }
 
   /**

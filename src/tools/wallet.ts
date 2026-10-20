@@ -138,7 +138,8 @@ export const walletTools: ToolDefinition[] = [
   },
   {
     name: 'wallet_get_balance',
-    description: 'Query the native token balance of a stored wallet.',
+    description:
+      'Query the native token balance of a stored wallet. Native token: AMB on Ambient (wAMB when held in a market), SOL on Solana, BNB on BSC, ETH on Arbitrum.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -358,12 +359,20 @@ async function handleGetBalance(args: Record<string, any>): Promise<ToolResponse
   const entry = await getWalletEntry(args.walletId as string);
   const chainWallet = getChainWallet(entry.chain);
   const balance = await chainWallet.getBalance(entry.address);
+  const { nativeToken, wrappedNativeToken } = chainWallet.config;
   return {
     content: [
       {
         type: 'text',
         text: JSON.stringify(
-          { walletId: entry.id, address: entry.address, chain: entry.chain, balance, token: chainWallet.config.nativeToken },
+          {
+            walletId: entry.id,
+            address: entry.address,
+            chain: entry.chain,
+            balance,
+            token: nativeToken,
+            ...(wrappedNativeToken ? { wrappedToken: wrappedNativeToken } : {}),
+          },
           null,
           2,
         ),

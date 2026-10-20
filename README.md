@@ -262,7 +262,7 @@ The market server never sees a private key; the wallet server never talks to the
 - *"Deposit 100 USDT into the wAMB/USDT market and place a maker order for 50 wAMB at 1.02."*
 - *"How much does it cost to bridge 100 USDT from Arbitrum to Ambient, and build the transaction."*
 - *"Withdraw all my USDT from the wAMB/USDT market and cancel every open order."*
-- *"Show my balances on the wAMB/USDT market and my native SOL balance."*
+- *"Show my balances on the wAMB/USDT market and my native AMB balance."*
 
 ---
 
@@ -334,7 +334,7 @@ Bridge chains: `ethereum`, `arbitrum`, `bsc`, `solana`, `ambient`.
 | `wallet_send_transaction` | Sign **and broadcast** a transaction | `walletId`, `password`, `transaction` |
 | `wallet_list` | List stored wallets (addresses and metadata only) | `chain?` |
 | `wallet_delete` | Delete a wallet (password proves ownership) | `walletId`, `password` |
-| `wallet_get_balance` | Native token balance of a stored wallet | `walletId` |
+| `wallet_get_balance` | Native token balance of a stored wallet (AMB on Ambient, SOL on Solana, BNB on BSC, ETH on Arbitrum) | `walletId` |
 
 ### Transaction input formats
 
@@ -365,10 +365,16 @@ the market server's `build_*` tools:
 
 | Chain id | Type | Native token | Decimals | Chain id (EVM) | RPC (override with env var) |
 | --- | --- | --- | --- | --- | --- |
-| `ambient` | SVM | SOL | 9 | — | `https://rpc.ambient.xyz` |
+| `ambient` | SVM | AMB (wrapped: wAMB) | 9 | — | `https://rpc.ambient.xyz` |
 | `solana` | SVM | SOL | 9 | — | `https://api.mainnet-beta.solana.com` |
 | `bsc` | EVM | BNB | 18 | 56 | `https://bsc-dataseed.binance.org/` |
 | `arbitrum` | EVM | ETH | 18 | 42161 | `https://arb1.arbitrum.io/rpc` |
+
+Ambient is an SVM chain, but its native token is **AMB** — not SOL. AMB is the gas/native asset
+held in a wallet, while **wAMB** is the wrapped form used as the base token of Ambient markets
+(for example the wAMB/USDT pair). `wallet_get_balance` reports the balance in AMB and also returns
+`wrappedToken: "wAMB"` for the Ambient chain, so an agent knows which symbol to use when it
+interacts with a market.
 
 Amounts in the market-server tools are expressed in **atoms** (base units) — for the Ambient
 wAMB/USDT pair that is 9 decimals (`1 USDT = 1_000_000_000` atoms). The wallet tools use plain

@@ -11,6 +11,11 @@ export interface ChainConfig {
   rpcUrl: string;
   nativeToken: string;
   decimals: number;
+  /**
+   * Wrapped form of the native token, when the chain has one
+   * (Ambient: AMB is native, wAMB is the wrapped token used in markets).
+   */
+  wrappedNativeToken?: string;
   /** EVM only */
   chainId?: number;
   /** Display label */
