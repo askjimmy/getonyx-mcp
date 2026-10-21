@@ -57,10 +57,14 @@ export async function generateWallet(
   password: string,
   label?: string,
 ): Promise<WalletEntry> {
+  if (chainId === 'ambient') {
+    throw new Error('Ambient wallet uses Dynamic online wallet. Use wallet_sign_in_email/wallet_verify_email to connect.');
+  }
   const { getChainWallet } = await import('../chains/index.js');
   const wallet = getChainWallet(chainId);
   const { privateKey, address } = await wallet.generate();
   const { encrypted } = await encryptWithPassword(privateKey, password);
+
 
   const entry: WalletEntry = {
     id: randomUUID(),
@@ -83,10 +87,14 @@ export async function importWallet(
   password: string,
   label?: string,
 ): Promise<WalletEntry> {
+  if (chainId === 'ambient') {
+    throw new Error('Ambient wallet uses Dynamic online wallet. Local import not supported for ambient.');
+  }
   const { getChainWallet } = await import('../chains/index.js');
   const wallet = getChainWallet(chainId);
   const address = await wallet.getAddress(privateKey);
   const { encrypted } = await encryptWithPassword(privateKey, password);
+
 
   const entry: WalletEntry = {
     id: randomUUID(),

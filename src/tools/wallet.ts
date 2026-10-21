@@ -17,8 +17,51 @@ import {
   decryptWalletEntry,
 } from '../keystore/index.js';
 import { getChainWallet, isChainId } from '../chains/index.js';
+import { sendEmailOtp, verifyEmailOtp, signOut, getSessionStatus } from '../dynamic/auth.js';
+import { signTransaction as signDynamicTx, sendTransaction as sendDynamicTx, getAmbientBalance } from '../dynamic/ambient.js';
+import { loadSession } from '../dynamic/session.js';
 
 export const walletTools: ToolDefinition[] = [
+  {
+    name: 'wallet_sign_in_email',
+    description: 'Send OTP to email for Dynamic Ambient wallet sign in/up.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        email: { type: 'string', description: 'Email address' },
+      },
+      required: ['email'],
+    },
+  },
+  {
+    name: 'wallet_verify_email',
+    description: 'Verify OTP code and authenticate Dynamic Ambient wallet.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        email: { type: 'string', description: 'Email address' },
+        verificationUUID: { type: 'string', description: 'Verification UUID from sign in' },
+        code: { type: 'string', description: 'OTP code' },
+      },
+      required: ['email', 'verificationUUID', 'code'],
+    },
+  },
+  {
+    name: 'wallet_sign_out',
+    description: 'Sign out and clear Dynamic Ambient wallet session.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'wallet_status',
+    description: 'Get Dynamic Ambient wallet authentication status.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
   {
     name: 'wallet_generate',
     description: 'Generate a new keypair, encrypt it with the provided password, and store it in the keystore.',
@@ -156,6 +199,14 @@ export async function handleWalletTool(
 ): Promise<ToolResponse> {
   try {
     switch (name) {
+      case 'wallet_sign_in_email':
+        return await handleSignInEmail(args);
+      case 'wallet_verify_email':
+        return await handleVerifyEmail(args);
+      case 'wallet_sign_out':
+        return await handleSignOut();
+      case 'wallet_status':
+        return await handleStatus();
       case 'wallet_generate':
         return await handleGenerate(args);
       case 'wallet_import':
@@ -188,6 +239,67 @@ export async function handleWalletTool(
 }
 
 // ---- Tool handlers ----
+
+async function handleSignInEmail(args: Record<string, any>): Promise<ToolResponse> {
+  const email = args.email as string;
+  const result = await sendEmailOtp(email);
+  return {
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify(
+          { success: true, verificationUUID: result.verificationUUID, message: 'OTP sent to email' },
+          null,
+          2,
+        ),
+      },
+    ],
+  };
+}
+
+async function handleVerifyEmail(args: Record<string, any>): Promise<ToolResponse> {
+  const result = await verifyEmailOtp({
+    email: args.email as string,
+    verificationUUID: args.verificationUUID as string,
+    code: args.code as string,
+  });
+  return {
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify(
+          { success: true, address: result.address, chain: 'ambient', message: 'Authenticated' },
+          null,
+          2,
+        ),
+      },
+    ],
+  };
+}
+
+async function handleSignOut(): Promise<ToolResponse> {
+  await signOut();
+  return {
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify({ success: true, message: 'Signed out' }, null, 2),
+      },
+    ],
+  };
+}
+
+async function handleStatus(): Promise<ToolResponse> {
+  const status = await getSessionStatus();
+  return {
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify(status, null, 2),
+      },
+    ],
+  };
+}
 
 async function handleGenerate(args: Record<string, any>): Promise<ToolResponse> {
   const chain = args.chain as string;
@@ -252,6 +364,24 @@ async function handleExport(args: Record<string, any>): Promise<ToolResponse> {
 }
 
 async function handleGetPublicKey(args: Record<string, any>): Promise<ToolResponse> {
+  if (!args.walletId) {
+    const session = await loadSession();
+    if (session) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              { address: session.walletMetadata.accountAddress, chain: 'ambient', source: 'dynamic' },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    }
+    throw new Error('No walletId provided and no Dynamic session');
+  }
   const entry = await getWalletEntry(args.walletId as string);
   return {
     content: [
@@ -287,6 +417,19 @@ async function handleSignMessage(args: Record<string, any>): Promise<ToolRespons
 }
 
 async function handleSignTransaction(args: Record<string, any>): Promise<ToolResponse> {
+  const transaction = args.transaction;
+  // Check if using Dynamic session for ambient (no walletId or explicit)
+  if (transaction?.unsignedTxBase64 && !args.walletId) {
+    const signature = await signDynamicTx(transaction.unsignedTxBase64);
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({ signature, signed: true }, null, 2),
+        },
+      ],
+    };
+  }
   const entry = await getWalletEntry(args.walletId as string);
   const privateKey = await decryptWalletEntry(entry, args.password as string);
   const chainWallet = getChainWallet(entry.chain);
@@ -306,6 +449,18 @@ async function handleSignTransaction(args: Record<string, any>): Promise<ToolRes
 }
 
 async function handleSendTransaction(args: Record<string, any>): Promise<ToolResponse> {
+  const transaction = args.transaction;
+  if (transaction?.unsignedTxBase64 && !args.walletId) {
+    const result = await sendDynamicTx(transaction.unsignedTxBase64);
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(result, null, 2),
+        },
+      ],
+    };
+  }
   const entry = await getWalletEntry(args.walletId as string);
   const privateKey = await decryptWalletEntry(entry, args.password as string);
   const chainWallet = getChainWallet(entry.chain);
@@ -337,6 +492,23 @@ async function handleList(args: Record<string, any>): Promise<ToolResponse> {
     createdAt: e.createdAt,
     label: e.metadata?.label,
   }));
+  
+  // Add Dynamic Ambient session if exists
+  try {
+    const session = await loadSession();
+    if (session) {
+      if (!chainFilter || chainFilter === 'ambient') {
+        list.push({
+          walletId: 'dynamic-ambient',
+          chain: 'ambient',
+          address: session.walletMetadata.accountAddress,
+          createdAt: session.createdAt,
+          label: session.email || 'Dynamic Ambient',
+        });
+      }
+    }
+  } catch {}
+  
   return {
     content: [{ type: 'text', text: JSON.stringify({ wallets: list, count: list.length }, null, 2) }],
   };
@@ -356,6 +528,31 @@ async function handleDelete(args: Record<string, any>): Promise<ToolResponse> {
 }
 
 async function handleGetBalance(args: Record<string, any>): Promise<ToolResponse> {
+  if (!args.walletId || args.walletId === 'dynamic-ambient') {
+    const session = await loadSession();
+    if (session) {
+      const balance = await getAmbientBalance();
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                address: session.walletMetadata.accountAddress,
+                chain: 'ambient',
+                balance,
+                token: 'AMB',
+                source: 'dynamic',
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    }
+    if (!args.walletId) throw new Error('No walletId and no Dynamic session');
+  }
   const entry = await getWalletEntry(args.walletId as string);
   const chainWallet = getChainWallet(entry.chain);
   const balance = await chainWallet.getBalance(entry.address);
