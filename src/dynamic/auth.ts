@@ -67,7 +67,17 @@ export async function verifyEmailOtp(params: {
   let accountAddress = '';
   try {
     const payload = JSON.parse(Buffer.from(jwt.split('.')[1], 'base64').toString());
-    accountAddress = payload.sub || payload.wallet_public_key || payload.address || payload.public_key || '';
+    // Prefer blockchain account address for solana/ambient
+    if (Array.isArray(payload.blockchain_accounts)) {
+      const sol = payload.blockchain_accounts.find((b: any) => b.chain === 'solana');
+      if (sol?.address) accountAddress = sol.address;
+      if (!accountAddress && payload.blockchain_accounts[0]?.address) {
+        accountAddress = payload.blockchain_accounts[0].address;
+      }
+    }
+    if (!accountAddress) {
+      accountAddress = payload.sub || payload.wallet_public_key || payload.address || payload.public_key || '';
+    }
   } catch (e) {
     // Ignore
   }
