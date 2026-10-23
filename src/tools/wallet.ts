@@ -18,7 +18,7 @@ import {
   decryptWalletEntry,
 } from '../keystore/index.js';
 import { getChainWallet, isChainId, listChainIds } from '../chains/index.js';
-import { sendEmailOtp, verifyEmailOtp, signOut, getSessionStatus } from '../dynamic/auth.js';
+import { connectToGetonyx, verifyEmailOtp, disconnect, getSessionStatus } from '../dynamic/auth.js';
 import {
   signAmbientTransaction,
   sendAmbientTransaction,
@@ -33,9 +33,9 @@ const LOCAL_CHAIN_LIST = 'solana, bsc, arbitrum';
 
 export const walletTools: ToolDefinition[] = [
   {
-    name: 'wallet_sign_in_email',
+    name: 'wallet_connect_to_getonyx',
     description:
-      'Send an OTP to an email address to sign in / sign up the Dynamic Ambient wallet. Follow with wallet_verify_email.',
+      'Connect to the Dynamic Ambient wallet via GetOnyx using email and OTP verification.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -52,16 +52,16 @@ export const walletTools: ToolDefinition[] = [
       type: 'object',
       properties: {
         email: { type: 'string', description: 'Email address' },
-        verificationUUID: { type: 'string', description: 'Verification UUID from sign in' },
+        verificationUUID: { type: 'string', description: 'Verification UUID from connect' },
         code: { type: 'string', description: 'OTP code' },
       },
       required: ['email', 'verificationUUID', 'code'],
     },
   },
   {
-    name: 'wallet_sign_out',
+    name: 'wallet_disconnect',
     description:
-      'Sign out and clear the Dynamic Ambient wallet session (JWT + session key + wallet metadata).',
+      'Disconnect and clear the Dynamic Ambient wallet session (JWT + session key + wallet metadata).',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -220,12 +220,12 @@ export async function handleWalletTool(
 ): Promise<ToolResponse> {
   try {
     switch (name) {
-      case 'wallet_sign_in_email':
-        return await handleSignInEmail(args);
+      case 'wallet_connect_to_getonyx':
+        return await handleConnectToGetonyx(args);
       case 'wallet_verify_email':
         return await handleVerifyEmail(args);
-      case 'wallet_sign_out':
-        return await handleSignOut();
+      case 'wallet_disconnect':
+        return await handleDisconnect();
       case 'wallet_status':
         return await handleStatus();
       case 'wallet_generate':
@@ -267,7 +267,7 @@ export async function handleWalletTool(
  * The Ambient wallet is online (Dynamic) and has no key in the keystore, so
  * exporting, deleting or message-signing with it is not possible.
  */
-function assertLocalWalletId(walletId: unknown): void {
+async function assertLocalWalletId(walletId: unknown): Promise<void> {
   if (!walletId) {
     throw new Error('walletId is required');
   }
@@ -276,6 +276,15 @@ function assertLocalWalletId(walletId: unknown): void {
       'The Ambient wallet is a Dynamic online wallet — it has no key in the keystore. ' +
         'Use wallet_sign_transaction / wallet_send_transaction to sign with it.',
     );
+  }
+  
+  // Additional check: ensure wallet entry's chain is a valid local chain
+  // This prevents legacy ambient entries from being addressed
+  const { getWalletEntry } = await import('../keystore/index.js');
+  const entry = await getWalletEntry(walletId as string);
+  const { isChainId } = await import('../chains/index.js');
+  if (!isChainId(entry.chain)) {
+    throw new Error(`Wallet not found: ${walletId}`);
   }
 }
 
@@ -295,9 +304,9 @@ function normalizeLocalTx(transaction: any): Record<string, any> {
   return transaction;
 }
 
-async function handleSignInEmail(args: Record<string, any>): Promise<ToolResponse> {
+async function handleConnectToGetonyx(args: Record<string, any>): Promise<ToolResponse> {
   const email = args.email as string;
-  const result = await sendEmailOtp(email);
+  const result = await connectToGetonyx(email);
   return {
     content: [
       {
@@ -338,13 +347,13 @@ async function handleVerifyEmail(args: Record<string, any>): Promise<ToolRespons
   };
 }
 
-async function handleSignOut(): Promise<ToolResponse> {
-  await signOut();
+async function handleDisconnect(): Promise<ToolResponse> {
+  await disconnect();
   return {
     content: [
       {
         type: 'text',
-        text: JSON.stringify({ success: true, message: 'Signed out' }, null, 2),
+        text: JSON.stringify({ success: true, message: 'Disconnected' }, null, 2),
       },
     ],
   };
@@ -414,7 +423,7 @@ async function handleImport(args: Record<string, any>): Promise<ToolResponse> {
 }
 
 async function handleExport(args: Record<string, any>): Promise<ToolResponse> {
-  assertLocalWalletId(args.walletId);
+  await assertLocalWalletId(args.walletId);
   const entry = await getWalletEntry(args.walletId as string);
   const privateKey = await decryptWalletEntry(entry, args.password as string);
   return {
@@ -473,7 +482,7 @@ async function handleGetPublicKey(args: Record<string, any>): Promise<ToolRespon
 }
 
 async function handleSignMessage(args: Record<string, any>): Promise<ToolResponse> {
-  assertLocalWalletId(args.walletId);
+  await assertLocalWalletId(args.walletId);
   const entry = await getWalletEntry(args.walletId as string);
   const privateKey = await decryptWalletEntry(entry, args.password as string);
   const chainWallet = getChainWallet(entry.chain);
@@ -656,7 +665,7 @@ async function handleList(args: Record<string, any>): Promise<ToolResponse> {
 }
 
 async function handleDelete(args: Record<string, any>): Promise<ToolResponse> {
-  assertLocalWalletId(args.walletId);
+  await assertLocalWalletId(args.walletId);
   const entry = await getWalletEntry(args.walletId as string);
   await deleteWallet(entry.id, args.password as string);
   return {

@@ -2,7 +2,7 @@
  * Dynamic email OTP auth flow for the Ambient wallet.
  *
  * Headless (no browser) sign-in:
- *   1. `sendEmailOtp`   — ask Dynamic to email a one-time code
+ *   1. `connectToGetonyx`   — ask Dynamic to email a one-time code
  *   2. `verifyEmailOtp`  — exchange the code for a user JWT bound to a
  *                          session key, then provision/reuse the Ambient wallet
  *
@@ -23,7 +23,7 @@ import {
 import { createDynamicClient, provisionAmbientWallet } from './client.js';
 import { getEnvironmentId } from './config.js';
 
-export async function sendEmailOtp(email: string): Promise<{ verificationUUID: string }> {
+export async function connectToGetonyx(email: string): Promise<{ verificationUUID: string }> {
   const auth = createAuthClient({ environmentId: getEnvironmentId() });
   const { verificationUUID } = await auth.email.sendOtp(email);
   return { verificationUUID };
@@ -115,7 +115,7 @@ export async function verifyEmailOtp(params: {
   return { address: walletMetadata.accountAddress, session };
 }
 
-export async function signOut(): Promise<void> {
+export async function disconnect(): Promise<void> {
   await clearSession();
 }
 

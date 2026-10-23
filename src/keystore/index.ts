@@ -30,7 +30,28 @@ async function loadRaw(): Promise<KeyStore> {
     if (!parsed.version || !parsed.wallets) {
       throw new Error('Invalid keystore format');
     }
-    return parsed;
+    
+    // Filter out any entries whose chain is not a valid ChainId (e.g., legacy ambient)
+    // Import here to avoid circular imports
+    const { listChainIds } = await import('../chains/index.js');
+    const validChains = new Set(listChainIds());
+    let cleaned = false;
+    
+    const wallets: Record<string, WalletEntry> = {};
+    for (const [id, entry] of Object.entries(parsed.wallets)) {
+      if (validChains.has(entry.chain)) {
+        wallets[id] = entry;
+      } else {
+        cleaned = true;
+      }
+    }
+    
+    if (cleaned) {
+      const cleanedKeystore: KeyStore = { version: 1, wallets };
+      await saveRaw(cleanedKeystore);
+    }
+    
+    return { version: 1, wallets };
   } catch (err: any) {
     if (err.code === 'ENOENT') {
       return { version: 1, wallets: {} };
@@ -141,10 +162,22 @@ export async function getWalletEntry(
   if (!entry) {
     throw new Error(`Wallet not found: ${walletId}`);
   }
+  
+  // Validate chain
+  const { isChainId } = await import('../chains/index.js');
+  if (!isChainId(entry.chain)) {
+    throw new Error(`Wallet not found: ${walletId}`);
+  }
+  
   return entry;
 }
 
 export async function listWalletEntries(): Promise<WalletEntry[]> {
   const keystore = await loadRaw();
-  return Object.values(keystore.wallets);
+  
+  // Filter out any entries whose chain is not a valid ChainId (e.g., legacy ambient)
+  const { listChainIds } = await import('../chains/index.js');
+  const validChains = new Set(listChainIds());
+  
+  return Object.values(keystore.wallets).filter(entry => validChains.has(entry.chain));
 }

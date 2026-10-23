@@ -96,8 +96,8 @@ With both servers registered, an agent can do all of the following from a single
   or sign and broadcast in one step (`wallet_send_transaction`).
 - Query native balances (`wallet_get_balance`), list wallets (`wallet_list`), export or delete a
   key (`wallet_export`, `wallet_delete`).
-- Connect the **Ambient** online wallet with an email + OTP (`wallet_sign_in_email`,
-  `wallet_verify_email`), check it (`wallet_status`) and disconnect (`wallet_sign_out`). Ambient
+- Connect the **Ambient** online wallet with an email + OTP (`wallet_connect_to_getonyx`,
+  `wallet_verify_email`), check it (`wallet_status`) and disconnect (`wallet_disconnect`). Ambient
   transactions are signed by Dynamic and broadcast to `https://rpc.ambient.xyz` — no Ambient
   private key is ever written to disk.
 
