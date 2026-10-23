@@ -16,6 +16,11 @@ internet, while private keys never leave your machine. The agent asks the market
 unsigned transaction, hands it to the wallet server for signing, and then asks the wallet server
 to broadcast it.
 
+The **Ambient** chain is the exception: it has **no local wallet**. The Ambient wallet is an
+online wallet managed by [Dynamic](https://dynamic.xyz) (email + OTP) and its key lives in
+Dynamic's MPC — this server only ever holds a session token and asks Dynamic to sign. Every other
+supported chain (Solana, BSC, Arbitrum) uses the local encrypted keystore.
+
 ```
         ┌───────────────────────────┐                ┌───────────────────────────┐
         │  GetOnyx market server    │                │  Wallet MCP (this repo)   │
@@ -25,10 +30,11 @@ to broadcast it.
         │  build_swap_tx, …         │ ─────────────► │  wallet_send_transaction   │
         │  quote_bridge, …          │   (base64)     │  wallet_generate / import  │
         └───────────────────────────┘                └───────────────────────────┘
-                    ▲                                              ▲
-                    │  21 market/trading/bridge tools              │  10 wallet tools
-                    └───────────── AI agent (Kilo, Claude, …) ────┘
+                     ▲                                              ▲
+                     │  21 market/trading/bridge tools              │  14 wallet tools
+                     └───────────── AI agent (Kilo, Claude, …) ────┘
 ```
+
 
 ---
 
@@ -85,17 +91,21 @@ With both servers registered, an agent can do all of the following from a single
 
 ### Manage keys
 - Generate a new keypair per chain, or import an existing private key (`wallet_generate`,
-  `wallet_import`).
+  `wallet_import`) — local chains only: Solana, BSC, Arbitrum.
 - Sign arbitrary messages (`wallet_sign_message`) and transactions (`wallet_sign_transaction`),
   or sign and broadcast in one step (`wallet_send_transaction`).
 - Query native balances (`wallet_get_balance`), list wallets (`wallet_list`), export or delete a
   key (`wallet_export`, `wallet_delete`).
+- Connect the **Ambient** online wallet with an email + OTP (`wallet_sign_in_email`,
+  `wallet_verify_email`), check it (`wallet_status`) and disconnect (`wallet_sign_out`). Ambient
+  transactions are signed by Dynamic and broadcast to `https://rpc.ambient.xyz` — no Ambient
+  private key is ever written to disk.
 
 ---
 
 ## Quick start
 
-Requirements: **Node.js >= 18** and npm.
+Requirements: **Node.js >= 20** and npm.
 
 ```bash
 git clone https://github.com/askjimmy/getonyx-mcp.git
@@ -237,20 +247,39 @@ getonyx → build_swap_tx {
 # → { transaction: "<base64>", chain: "solana", instructions: [...] }
 ```
 
-### 3. Sign and broadcast locally
+### 3. Sign and broadcast
+
+For a **local** wallet (Solana, BSC, Arbitrum):
+
+```
+You: "Sign it with my BSC wallet and send it."
+```
+
+```
+wallet → wallet_list { chain: "bsc" }                      # find the walletId
+wallet → wallet_send_transaction {
+  walletId, password,
+  transaction: { to: "0x…", value: "1000000000000000000" }
+}
+# → { hash: "0x…" }
+```
+
+For the **Ambient** wallet (online, Dynamic):
 
 ```
 You: "Sign it with my Ambient wallet and send it."
 ```
 
 ```
-wallet → wallet_list { chain: "ambient" }                 # find the walletId
+wallet → wallet_verify_email { email, verificationUUID, code }   # once per session
 wallet → wallet_send_transaction {
-  walletId, password,
-  transaction: { serialized: "<base64 from step 2>" }
+  transaction: { unsignedTxBase64: "<base64 from step 2>" }
 }
-# → { hash: "5Ujj..." }
+# → { signature, txid, address }
 ```
+
+The Ambient wallet must be the fee payer (or another required signer) of the transaction it signs,
+so build the transaction with its address as `payer`.
 
 The market server never sees a private key; the wallet server never talks to the market server.
 
@@ -321,20 +350,36 @@ Bridge chains: `ethereum`, `arbitrum`, `bsc`, `solana`, `ambient`.
 
 ## Tool reference — Wallet server
 
-10 tools, exposed by this repository over stdio.
+14 tools, exposed by this repository over stdio.
+
+### Local wallets (keystore-backed)
 
 | Tool | Description | Params |
 | --- | --- | --- |
-| `wallet_generate` | Create a new keypair, encrypt it, store it in the keystore | `chain`, `password`, `label?` |
+| `wallet_generate` | Create a new keypair, encrypt it, store it in the keystore | `chain` (`solana`/`bsc`/`arbitrum`), `password`, `label?` |
 | `wallet_import` | Import an existing private key, encrypt it, store it | `chain`, `privateKey`, `password`, `label?` |
 | `wallet_export` | Decrypt and export a stored private key | `walletId`, `password` |
-| `wallet_get_public_key` | Public key / address of a stored wallet (no password) | `walletId` |
 | `wallet_sign_message` | Sign an arbitrary UTF-8 message | `walletId`, `password`, `message` |
-| `wallet_sign_transaction` | Sign a transaction **without** broadcasting | `walletId`, `password`, `transaction` |
-| `wallet_send_transaction` | Sign **and broadcast** a transaction | `walletId`, `password`, `transaction` |
 | `wallet_list` | List stored wallets (addresses and metadata only) | `chain?` |
 | `wallet_delete` | Delete a wallet (password proves ownership) | `walletId`, `password` |
-| `wallet_get_balance` | Native token balance of a stored wallet (AMB on Ambient, SOL on Solana, BNB on BSC, ETH on Arbitrum) | `walletId` |
+
+### Signing / broadcasting
+
+| Tool | Description | Params |
+| --- | --- | --- |
+| `wallet_sign_transaction` | Sign a transaction **without** broadcasting | `walletId`, `password`, `transaction` (local) · `transaction` (Ambient) |
+| `wallet_send_transaction` | Sign **and broadcast** a transaction | `walletId`, `password`, `transaction` (local) · `transaction` (Ambient) |
+| `wallet_get_public_key` | Public key / address of a wallet | `walletId` (or `dynamic-ambient`) |
+| `wallet_get_balance` | Native token balance of a wallet (SOL / BNB / ETH / AMB) | `walletId` (or `dynamic-ambient`) |
+
+### Ambient wallet (Dynamic, online)
+
+| Tool | Description | Params |
+| --- | --- | --- |
+| `wallet_sign_in_email` | Send an OTP to an email address | `email` |
+| `wallet_verify_email` | Verify the OTP, authenticate, create/reuse the Ambient wallet | `email`, `verificationUUID`, `code` |
+| `wallet_sign_out` | Clear the Dynamic session (JWT + session key + wallet metadata) | — |
+| `wallet_status` | Authentication status of the Ambient wallet | — |
 
 ### Transaction input formats
 
@@ -345,36 +390,48 @@ Bridge chains: `ethereum`, `arbitrum`, `bsc`, `solana`, `ambient`.
 { "to": "0x…", "value": "1000000000000000000", "data": "0x…", "chainId": 56 }
 ```
 
-**SVM** (Ambient, Solana) — a base64-encoded serialized Solana transaction, exactly as returned by
+**SVM** (local Solana) — a base64-encoded serialized Solana transaction, exactly as returned by
 the market server's `build_*` tools:
 
 ```json
 { "serialized": "AQAB...==" }
 ```
 
+**Ambient** (Dynamic, online) — a base64-encoded *unsigned* transaction; the field is
+`unsignedTxBase64` (`serialized` is accepted as an alias). The Dynamic wallet must be the fee
+payer / signer of the transaction:
+
+```json
+{ "unsignedTxBase64": "AQAB...==" }
+```
+
 ### Private key formats accepted by `wallet_import`
 
 | Chain | Accepted formats |
 | --- | --- |
-| Ambient, Solana | base58 64-byte secret key, base58 32-byte seed, hex secret key/seed, or a JSON array of 64 byte values |
+| Solana | base58 64-byte secret key, base58 32-byte seed, hex secret key/seed, or a JSON array of 64 byte values |
 | BSC, Arbitrum | `0x`-prefixed 32-byte hex private key |
+
+Ambient has no local wallet, so it cannot be imported.
 
 ---
 
 ## Supported chains
 
-| Chain id | Type | Native token | Decimals | Chain id (EVM) | RPC (override with env var) |
-| --- | --- | --- | --- | --- | --- |
-| `ambient` | SVM | AMB (wrapped: wAMB) | 9 | — | `https://rpc.ambient.xyz` |
-| `solana` | SVM | SOL | 9 | — | `https://api.mainnet-beta.solana.com` |
-| `bsc` | EVM | BNB | 18 | 56 | `https://bsc-dataseed.binance.org/` |
-| `arbitrum` | EVM | ETH | 18 | 42161 | `https://arb1.arbitrum.io/rpc` |
+| Chain id | Type | Wallet | Native token | Decimals | Chain id (EVM) | RPC (override with env var) |
+| --- | --- | --- | --- | --- | --- | --- |
+| `ambient` | SVM | Dynamic online wallet (email + OTP) | AMB | 9 | — | `https://rpc.ambient.xyz` |
+| `solana` | SVM | local keystore | SOL | 9 | — | `https://api.mainnet-beta.solana.com` |
+| `bsc` | EVM | local keystore | BNB | 18 | 56 | `https://bsc-dataseed.binance.org/` |
+| `arbitrum` | EVM | local keystore | ETH | 18 | 42161 | `https://arb1.arbitrum.io/rpc` |
 
 Ambient is an SVM chain, but its native token is **AMB** — not SOL. AMB is the gas/native asset
 held in a wallet, while **wAMB** is the wrapped form used as the base token of Ambient markets
-(for example the wAMB/USDT pair). `wallet_get_balance` reports the balance in AMB and also returns
-`wrappedToken: "wAMB"` for the Ambient chain, so an agent knows which symbol to use when it
-interacts with a market.
+(for example the wAMB/USDT pair). `wallet_get_balance` reports the Ambient balance in AMB.
+
+There is **no local Ambient wallet**: `wallet_generate` / `wallet_import` reject the `ambient`
+chain. The Ambient key lives in Dynamic's MPC, is used only to produce signatures, and never
+touches this machine's keystore.
 
 Amounts in the market-server tools are expressed in **atoms** (base units) — for the Ambient
 wAMB/USDT pair that is 9 decimals (`1 USDT = 1_000_000_000` atoms). The wallet tools use plain
@@ -391,6 +448,13 @@ token units and decimal strings.
   `wallet_sign_*`, `wallet_send_transaction` and `wallet_delete` call.
 - **Keys are decrypted in memory only** for the duration of a single operation and discarded
   immediately afterwards.
+- **Ambient has no local key.** The Dynamic wallet is an online wallet: the key never exists on
+  this machine, and the server only holds a session token plus the wallet metadata.
+- **The Dynamic session is bound to a session key.** The JWT is minted against a P-256 session
+  key, so a leaked JWT alone cannot sign — the keyshares relay also requires a signature made
+  with the session private key.
+- **The session file is encrypted at rest** when `DYNAMIC_SESSION_PASSWORD` (or `WALLET_PASSWORD`)
+  is set; otherwise it is written in plaintext with `0600` permissions and a warning is printed.
 - **Listing never leaks secrets.** `wallet_list` and `wallet_get_balance` return addresses and
   metadata only.
 - **The wallet server is local-only.** It speaks stdio and is spawned by your MCP client; it is
@@ -406,11 +470,17 @@ token units and decimal strings.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `WALLET_KEYSTORE_PATH` | `~/.config/wallet-mcp-server/keystore.json` | Keystore file location |
-| `AMBIENT_RPC_URL` | `https://rpc.ambient.xyz` | Ambient RPC endpoint |
+| `WALLET_KEYSTORE_PATH` | `~/.config/wallet-mcp-server/keystore.json` | Keystore file location (local wallets) |
+| `AMBIENT_RPC_URL` | `https://rpc.ambient.xyz` | Ambient RPC endpoint (signing + broadcast) |
 | `SOLANA_RPC_URL` | `https://api.mainnet-beta.solana.com` | Solana RPC endpoint |
 | `BSC_RPC_URL` | `https://bsc-dataseed.binance.org/` | BSC RPC endpoint |
 | `ARBITRUM_RPC_URL` | `https://arb1.arbitrum.io/rpc` | Arbitrum One RPC endpoint |
+| `DYNAMIC_ENVIRONMENT_ID` | `a9e7161d-c693-44be-8183-2c104ec7264e` | Dynamic project id — must match the dapp |
+| `DYNAMIC_SESSION_PATH` | `~/.config/wallet-mcp-server/dynamic-session.json` | Dynamic session file location |
+| `DYNAMIC_SESSION_PASSWORD` | — | Password that encrypts the session file (falls back to `WALLET_PASSWORD`) |
+| `WALLET_PASSWORD` | — | Password of the Dynamic wallet key-share backup |
+| `AMBIENT_CHAIN_ID` | `mainnet-beta` | Chain id reported to Dynamic when signing Ambient transactions |
+| `AMBIENT_SKIP_PREFLIGHT` | — | Set to `1` to skip preflight simulation when broadcasting |
 
 Example — point the wallet server at a private RPC and a custom keystore:
 
@@ -422,7 +492,8 @@ Example — point the wallet server at a private RPC and a custom keystore:
       "args": ["/absolute/path/to/getonyx-mcp/dist/index.js"],
       "env": {
         "AMBIENT_RPC_URL": "https://your-private-rpc.example",
-        "WALLET_KEYSTORE_PATH": "/absolute/path/to/keystore.json"
+        "WALLET_KEYSTORE_PATH": "/absolute/path/to/keystore.json",
+        "DYNAMIC_SESSION_PASSWORD": "a-long-random-secret"
       }
     }
   }
@@ -487,16 +558,22 @@ src/
 ├── server.ts           # MCP server bootstrap
 ├── tools/
 │   ├── index.ts        # tool registry
-│   └── wallet.ts       # the 10 wallet tools
+│   └── wallet.ts       # the 14 wallet tools
 ├── keystore/
 │   ├── index.ts        # keystore manager (load/save/generate/import)
 │   ├── crypto.ts       # PBKDF2 + AES-256-GCM
 │   └── types.ts
-└── chains/
-    ├── index.ts        # chain registry
-    ├── solana.ts       # SVM implementation (@solana/web3.js)
-    ├── evm.ts          # EVM implementation (ethers v6)
-    └── types.ts
+├── chains/
+│   ├── index.ts        # chain registry (local chains only)
+│   ├── solana.ts       # SVM implementation (@solana/web3.js)
+│   ├── evm.ts          # EVM implementation (ethers v6)
+│   └── types.ts
+└── dynamic/
+    ├── auth.ts         # Dynamic email OTP sign-in (SDK auth client)
+    ├── client.ts       # DynamicSvmWalletClient + Ambient wallet provisioning
+    ├── ambient.ts      # Ambient sign + broadcast via rpc.ambient.xyz
+    ├── session.ts      # session store (encrypted at rest)
+    └── config.ts       # env configuration
 ```
 
 The market-server half of the stack lives in a separate repository and is deployed to Cloud Run;

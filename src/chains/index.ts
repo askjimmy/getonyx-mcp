@@ -9,15 +9,6 @@ import { EvmWallet } from './evm.js';
 import { SolanaWallet } from './solana.js';
 
 export const CHAIN_CONFIGS: Record<ChainId, ChainConfig> = {
-  ambient: {
-    id: 'ambient',
-    type: 'svm',
-    rpcUrl: process.env.AMBIENT_RPC_URL || 'https://rpc.ambient.xyz',
-    nativeToken: 'AMB',
-    wrappedNativeToken: 'wAMB',
-    decimals: 9,
-    label: 'Ambient',
-  },
   solana: {
     id: 'solana',
     type: 'svm',

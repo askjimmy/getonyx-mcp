@@ -2,7 +2,14 @@
  * Chain configuration and wallet interface types.
  */
 
-export type ChainId = 'ambient' | 'solana' | 'bsc' | 'arbitrum';
+/**
+ * Chains with a local, keystore-backed wallet.
+ *
+ * Ambient is intentionally absent: Ambient wallets are Dynamic-only
+ * (`wallet_sign_in_email` / `wallet_verify_email`) and no private key for them
+ * is ever stored on disk.
+ */
+export type ChainId = 'solana' | 'bsc' | 'arbitrum';
 export type ChainType = 'svm' | 'evm';
 
 export interface ChainConfig {
@@ -11,11 +18,6 @@ export interface ChainConfig {
   rpcUrl: string;
   nativeToken: string;
   decimals: number;
-  /**
-   * Wrapped form of the native token, when the chain has one
-   * (Ambient: AMB is native, wAMB is the wrapped token used in markets).
-   */
-  wrappedNativeToken?: string;
   /** EVM only */
   chainId?: number;
   /** Display label */

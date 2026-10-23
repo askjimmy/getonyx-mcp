@@ -4,6 +4,9 @@
  * Stores wallet entries in a JSON file at `WALLET_KEYSTORE_PATH` (default
  * `~/.config/wallet-mcp-server/keystore.json`). Private keys are encrypted
  * at rest with AES-256-GCM (PBKDF2-derived key). Passwords are never stored.
+ *
+ * Only chains with a local wallet live here (solana, bsc, arbitrum). The
+ * Ambient chain uses the Dynamic online wallet, so it has no keystore entry.
  */
 
 import * as fs from 'node:fs';
@@ -57,9 +60,6 @@ export async function generateWallet(
   password: string,
   label?: string,
 ): Promise<WalletEntry> {
-  if (chainId === 'ambient') {
-    throw new Error('Ambient wallet uses Dynamic online wallet. Use wallet_sign_in_email/wallet_verify_email to connect.');
-  }
   const { getChainWallet } = await import('../chains/index.js');
   const wallet = getChainWallet(chainId);
   const { privateKey, address } = await wallet.generate();
@@ -87,9 +87,6 @@ export async function importWallet(
   password: string,
   label?: string,
 ): Promise<WalletEntry> {
-  if (chainId === 'ambient') {
-    throw new Error('Ambient wallet uses Dynamic online wallet. Local import not supported for ambient.');
-  }
   const { getChainWallet } = await import('../chains/index.js');
   const wallet = getChainWallet(chainId);
   const address = await wallet.getAddress(privateKey);

@@ -37,6 +37,8 @@ RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund && npm cache clean -
 
 # Default keystore path
 ENV WALLET_KEYSTORE_PATH=/home/waluser/.config/wallet-mcp-server/keystore.json
+# Default Dynamic (Ambient) session path
+ENV DYNAMIC_SESSION_PATH=/home/waluser/.config/wallet-mcp-server/dynamic-session.json
 
 USER waluser
 

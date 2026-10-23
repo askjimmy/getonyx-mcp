@@ -1,8 +1,14 @@
 /**
  * Keystore types.
+ *
+ * Only chains with a local, keystore-backed wallet are listed here. Ambient is
+ * not one of them: it is served by the Dynamic online wallet, so no Ambient
+ * private key is ever written to disk.
  */
 
-export type ChainId = 'ambient' | 'solana' | 'bsc' | 'arbitrum';
+import type { ChainId } from '../chains/types.js';
+
+export type { ChainId };
 
 export interface WalletEntry {
   id: string;

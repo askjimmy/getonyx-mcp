@@ -1,10 +1,11 @@
 /**
  * Wallet management MCP tools.
  *
- * Implements all 10 wallet operations:
- *   wallet_generate, wallet_import, wallet_export, wallet_get_public_key,
- *   wallet_sign_message, wallet_sign_transaction, wallet_send_transaction,
- *   wallet_list, wallet_delete, wallet_get_balance
+ * Two families of wallets:
+ *   - Local (keystore-backed): solana, bsc, arbitrum. Keys are encrypted at
+ *     rest in the keystore file.
+ *   - Ambient: Dynamic online wallet. No private key is ever stored on disk —
+ *     the key lives in Dynamic's MPC and only ever produces signatures.
  */
 
 import { ToolDefinition, ToolResponse } from './types.js';
@@ -16,15 +17,25 @@ import {
   listWalletEntries,
   decryptWalletEntry,
 } from '../keystore/index.js';
-import { getChainWallet, isChainId } from '../chains/index.js';
+import { getChainWallet, isChainId, listChainIds } from '../chains/index.js';
 import { sendEmailOtp, verifyEmailOtp, signOut, getSessionStatus } from '../dynamic/auth.js';
-import { signTransaction as signDynamicTx, sendTransaction as sendDynamicTx, getAmbientBalance } from '../dynamic/ambient.js';
+import {
+  signAmbientTransaction,
+  sendAmbientTransaction,
+  getAmbientBalance,
+} from '../dynamic/ambient.js';
 import { loadSession } from '../dynamic/session.js';
+
+/** Pseudo wallet id used to address the Dynamic Ambient session. */
+const DYNAMIC_WALLET_ID = 'dynamic-ambient';
+
+const LOCAL_CHAIN_LIST = 'solana, bsc, arbitrum';
 
 export const walletTools: ToolDefinition[] = [
   {
     name: 'wallet_sign_in_email',
-    description: 'Send OTP to email for Dynamic Ambient wallet sign in/up.',
+    description:
+      'Send an OTP to an email address to sign in / sign up the Dynamic Ambient wallet. Follow with wallet_verify_email.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -35,7 +46,8 @@ export const walletTools: ToolDefinition[] = [
   },
   {
     name: 'wallet_verify_email',
-    description: 'Verify OTP code and authenticate Dynamic Ambient wallet.',
+    description:
+      'Verify the OTP code and authenticate the Dynamic Ambient wallet. On first sign-in an Ambient wallet is created and its address is returned.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -48,7 +60,8 @@ export const walletTools: ToolDefinition[] = [
   },
   {
     name: 'wallet_sign_out',
-    description: 'Sign out and clear Dynamic Ambient wallet session.',
+    description:
+      'Sign out and clear the Dynamic Ambient wallet session (JWT + session key + wallet metadata).',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -56,7 +69,8 @@ export const walletTools: ToolDefinition[] = [
   },
   {
     name: 'wallet_status',
-    description: 'Get Dynamic Ambient wallet authentication status.',
+    description:
+      'Get the Dynamic Ambient wallet authentication status (authenticated, address, expiry).',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -64,11 +78,12 @@ export const walletTools: ToolDefinition[] = [
   },
   {
     name: 'wallet_generate',
-    description: 'Generate a new keypair, encrypt it with the provided password, and store it in the keystore.',
+    description:
+      'Generate a new keypair, encrypt it with the provided password, and store it in the keystore. Local chains only (solana, bsc, arbitrum) — Ambient uses the Dynamic online wallet (wallet_sign_in_email / wallet_verify_email).',
     inputSchema: {
       type: 'object',
       properties: {
-        chain: { type: 'string', description: 'Chain ID (ambient, solana, bsc, arbitrum)' },
+        chain: { type: 'string', description: `Chain ID (${LOCAL_CHAIN_LIST})` },
         password: { type: 'string', description: 'Encryption password for the keystore' },
         label: { type: 'string', description: 'Optional label for the wallet' },
       },
@@ -77,11 +92,12 @@ export const walletTools: ToolDefinition[] = [
   },
   {
     name: 'wallet_import',
-    description: 'Import an existing private key, encrypt it, and store it in the keystore.',
+    description:
+      'Import an existing private key, encrypt it, and store it in the keystore. Local chains only (solana, bsc, arbitrum) — Ambient keys are managed by Dynamic.',
     inputSchema: {
       type: 'object',
       properties: {
-        chain: { type: 'string', description: 'Chain ID (ambient, solana, bsc, arbitrum)' },
+        chain: { type: 'string', description: `Chain ID (${LOCAL_CHAIN_LIST})` },
         privateKey: { type: 'string', description: 'Private key in chain-native format (hex for EVM, base58 for SVM)' },
         password: { type: 'string', description: 'Encryption password for the keystore' },
         label: { type: 'string', description: 'Optional label for the wallet' },
@@ -103,18 +119,18 @@ export const walletTools: ToolDefinition[] = [
   },
   {
     name: 'wallet_get_public_key',
-    description: 'Get the public key / address of a stored wallet.',
+    description:
+      'Get the public key / address of a stored wallet. Pass walletId "dynamic-ambient" (or omit walletId) for the Dynamic Ambient wallet.',
     inputSchema: {
       type: 'object',
       properties: {
-        walletId: { type: 'string', description: 'Wallet ID (UUID)' },
+        walletId: { type: 'string', description: 'Wallet ID (UUID), or "dynamic-ambient"' },
       },
-      required: ['walletId'],
     },
   },
   {
     name: 'wallet_sign_message',
-    description: 'Sign an arbitrary message with a stored wallet.',
+    description: 'Sign an arbitrary message with a stored wallet (local chains only).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -127,34 +143,40 @@ export const walletTools: ToolDefinition[] = [
   },
   {
     name: 'wallet_sign_transaction',
-    description: 'Sign a transaction with a stored wallet (does not broadcast). For EVM, provide standard tx fields; for SVM, provide a base64-serialized transaction.',
+    description:
+      'Sign a transaction (does not broadcast). Local chains: pass walletId + password and the transaction ({serialized} base64 for Solana, EVM fields for BSC/Arbitrum). Ambient: sign in with wallet_sign_in_email / wallet_verify_email first, then omit walletId and pass {unsignedTxBase64} — the Ambient wallet must be the fee payer of the transaction.',
     inputSchema: {
       type: 'object',
       properties: {
-        walletId: { type: 'string', description: 'Wallet ID (UUID)' },
-        password: { type: 'string', description: 'Keystore password to decrypt the private key' },
+        walletId: { type: 'string', description: 'Wallet ID (UUID) — omit for the Dynamic Ambient wallet' },
+        password: { type: 'string', description: 'Keystore password to decrypt the private key (local chains only)' },
+        chain: { type: 'string', description: 'Optional: "ambient" to target the Dynamic Ambient wallet explicitly' },
         transaction: {
           type: 'object',
-          description: 'Transaction input (SVM: {serialized} / EVM: {to,value,data,gasLimit,gasPrice,nonce,chainId})',
+          description:
+            'Transaction input (local Solana: {serialized} / EVM: {to,value,data,gasLimit,gasPrice,nonce,chainId}; Ambient: {unsignedTxBase64})',
         },
       },
-      required: ['walletId', 'password', 'transaction'],
+      required: ['transaction'],
     },
   },
   {
     name: 'wallet_send_transaction',
-    description: 'Sign and broadcast a transaction. Fills in missing gas/nonce params from the RPC provider.',
+    description:
+      'Sign and broadcast a transaction. Local chains: pass walletId + password and the transaction ({serialized} base64 for Solana, EVM fields for BSC/Arbitrum). Ambient: sign in with wallet_sign_in_email / wallet_verify_email first, then omit walletId and pass {unsignedTxBase64} — the Ambient wallet must be the fee payer of the transaction. Fills in missing gas/nonce params from the RPC provider for EVM chains.',
     inputSchema: {
       type: 'object',
       properties: {
-        walletId: { type: 'string', description: 'Wallet ID (UUID)' },
-        password: { type: 'string', description: 'Keystore password to decrypt the private key' },
+        walletId: { type: 'string', description: 'Wallet ID (UUID) — omit for the Dynamic Ambient wallet' },
+        password: { type: 'string', description: 'Keystore password to decrypt the private key (local chains only)' },
+        chain: { type: 'string', description: 'Optional: "ambient" to target the Dynamic Ambient wallet explicitly' },
         transaction: {
           type: 'object',
-          description: 'Transaction input (SVM: {serialized} / EVM: {to,value,data,gasLimit,gasPrice,nonce,chainId})',
+          description:
+            'Transaction input (local Solana: {serialized} / EVM: {to,value,data,gasLimit,gasPrice,nonce,chainId}; Ambient: {unsignedTxBase64})',
         },
       },
-      required: ['walletId', 'password', 'transaction'],
+      required: ['transaction'],
     },
   },
   {
@@ -182,13 +204,12 @@ export const walletTools: ToolDefinition[] = [
   {
     name: 'wallet_get_balance',
     description:
-      'Query the native token balance of a stored wallet. Native token: AMB on Ambient (wAMB when held in a market), SOL on Solana, BNB on BSC, ETH on Arbitrum.',
+      'Query the native token balance of a wallet. Native token: AMB on Ambient (Dynamic wallet), SOL on Solana, BNB on BSC, ETH on Arbitrum.',
     inputSchema: {
       type: 'object',
       properties: {
-        walletId: { type: 'string', description: 'Wallet ID (UUID)' },
+        walletId: { type: 'string', description: 'Wallet ID (UUID), or "dynamic-ambient"' },
       },
-      required: ['walletId'],
     },
   },
 ];
@@ -240,6 +261,40 @@ export async function handleWalletTool(
 
 // ---- Tool handlers ----
 
+/**
+ * Guard for tools that only work with a keystore-backed wallet.
+ *
+ * The Ambient wallet is online (Dynamic) and has no key in the keystore, so
+ * exporting, deleting or message-signing with it is not possible.
+ */
+function assertLocalWalletId(walletId: unknown): void {
+  if (!walletId) {
+    throw new Error('walletId is required');
+  }
+  if (walletId === DYNAMIC_WALLET_ID) {
+    throw new Error(
+      'The Ambient wallet is a Dynamic online wallet — it has no key in the keystore. ' +
+        'Use wallet_sign_transaction / wallet_send_transaction to sign with it.',
+    );
+  }
+}
+
+/**
+ * Normalize the transaction input for local chains.
+ *
+ * The market server returns `{ transaction: "<base64>" }`; accept both that
+ * shape and the explicit `{ serialized }` / `{ unsignedTxBase64 }` objects.
+ */
+function normalizeLocalTx(transaction: any): Record<string, any> {
+  if (!transaction || typeof transaction !== 'object') {
+    throw new Error('transaction is required');
+  }
+  if (typeof transaction.serialized !== 'string' && typeof transaction.unsignedTxBase64 === 'string') {
+    return { ...transaction, serialized: transaction.unsignedTxBase64 };
+  }
+  return transaction;
+}
+
 async function handleSignInEmail(args: Record<string, any>): Promise<ToolResponse> {
   const email = args.email as string;
   const result = await sendEmailOtp(email);
@@ -268,7 +323,13 @@ async function handleVerifyEmail(args: Record<string, any>): Promise<ToolRespons
       {
         type: 'text',
         text: JSON.stringify(
-          { success: true, address: result.address, chain: 'ambient', message: 'Authenticated' },
+          {
+            success: true,
+            address: result.address,
+            chain: 'ambient',
+            expiresAt: result.session.expiresAt,
+            message: 'Authenticated',
+          },
           null,
           2,
         ),
@@ -304,7 +365,10 @@ async function handleStatus(): Promise<ToolResponse> {
 async function handleGenerate(args: Record<string, any>): Promise<ToolResponse> {
   const chain = args.chain as string;
   if (!isChainId(chain)) {
-    throw new Error(`Invalid chain: ${chain}. Must be one of: ambient, solana, bsc, arbitrum`);
+    throw new Error(
+      `Invalid chain: ${chain}. Local keystore wallets are available for: ${listChainIds().join(', ')}. ` +
+        `Ambient is served by the Dynamic online wallet — use wallet_sign_in_email / wallet_verify_email.`,
+    );
   }
   const entry = await generateWallet(chain, args.password as string, args.label as string | undefined);
   return {
@@ -324,7 +388,10 @@ async function handleGenerate(args: Record<string, any>): Promise<ToolResponse> 
 async function handleImport(args: Record<string, any>): Promise<ToolResponse> {
   const chain = args.chain as string;
   if (!isChainId(chain)) {
-    throw new Error(`Invalid chain: ${chain}`);
+    throw new Error(
+      `Invalid chain: ${chain}. Local keystore wallets are available for: ${listChainIds().join(', ')}. ` +
+        `Ambient keys are managed by Dynamic and cannot be imported locally.`,
+    );
   }
   const entry = await importWallet(
     chain,
@@ -347,6 +414,7 @@ async function handleImport(args: Record<string, any>): Promise<ToolResponse> {
 }
 
 async function handleExport(args: Record<string, any>): Promise<ToolResponse> {
+  assertLocalWalletId(args.walletId);
   const entry = await getWalletEntry(args.walletId as string);
   const privateKey = await decryptWalletEntry(entry, args.password as string);
   return {
@@ -364,7 +432,7 @@ async function handleExport(args: Record<string, any>): Promise<ToolResponse> {
 }
 
 async function handleGetPublicKey(args: Record<string, any>): Promise<ToolResponse> {
-  if (!args.walletId) {
+  if (!args.walletId || args.walletId === DYNAMIC_WALLET_ID) {
     const session = await loadSession();
     if (session) {
       return {
@@ -372,7 +440,12 @@ async function handleGetPublicKey(args: Record<string, any>): Promise<ToolRespon
           {
             type: 'text',
             text: JSON.stringify(
-              { address: session.walletMetadata.accountAddress, chain: 'ambient', source: 'dynamic' },
+              {
+                walletId: DYNAMIC_WALLET_ID,
+                address: session.walletMetadata.accountAddress,
+                chain: 'ambient',
+                source: 'dynamic',
+              },
               null,
               2,
             ),
@@ -380,7 +453,9 @@ async function handleGetPublicKey(args: Record<string, any>): Promise<ToolRespon
         ],
       };
     }
-    throw new Error('No walletId provided and no Dynamic session');
+    if (!args.walletId) {
+      throw new Error('No walletId provided and no Dynamic session');
+    }
   }
   const entry = await getWalletEntry(args.walletId as string);
   return {
@@ -398,6 +473,7 @@ async function handleGetPublicKey(args: Record<string, any>): Promise<ToolRespon
 }
 
 async function handleSignMessage(args: Record<string, any>): Promise<ToolResponse> {
+  assertLocalWalletId(args.walletId);
   const entry = await getWalletEntry(args.walletId as string);
   const privateKey = await decryptWalletEntry(entry, args.password as string);
   const chainWallet = getChainWallet(entry.chain);
@@ -416,24 +492,65 @@ async function handleSignMessage(args: Record<string, any>): Promise<ToolRespons
   };
 }
 
+/**
+ * Whether the request targets the Dynamic Ambient wallet.
+ *
+ * Ambient is explicit (`chain: "ambient"`) or implied by an unsigned Ambient
+ * transaction without a local `walletId`.
+ */
+function isAmbientRequest(args: Record<string, any>): boolean {
+  const chain = typeof args.chain === 'string' ? args.chain.toLowerCase() : undefined;
+  if (chain === 'ambient') return true;
+  if (args.walletId) return false;
+  const tx = args.transaction as any;
+  return typeof tx?.unsignedTxBase64 === 'string';
+}
+
+/** Pull the base64-encoded unsigned transaction out of the tool arguments. */
+function extractAmbientTx(args: Record<string, any>): string {
+  const tx = args.transaction as any;
+  const base64 = tx?.unsignedTxBase64 ?? tx?.serialized;
+  if (typeof base64 !== 'string' || base64.length === 0) {
+    throw new Error(
+      'Ambient transactions require transaction.unsignedTxBase64 (base64-encoded unsigned transaction).',
+    );
+  }
+  return base64;
+}
+
 async function handleSignTransaction(args: Record<string, any>): Promise<ToolResponse> {
-  const transaction = args.transaction;
-  // Check if using Dynamic session for ambient (no walletId or explicit)
-  if (transaction?.unsignedTxBase64 && !args.walletId) {
-    const signature = await signDynamicTx(transaction.unsignedTxBase64);
+  if (isAmbientRequest(args)) {
+    const result = await signAmbientTransaction(extractAmbientTx(args));
     return {
       content: [
         {
           type: 'text',
-          text: JSON.stringify({ signature, signed: true }, null, 2),
+          text: JSON.stringify(
+            {
+              chain: 'ambient',
+              address: result.address,
+              signature: result.signature,
+              signedTx: result.signedTx,
+              signed: true,
+            },
+            null,
+            2,
+          ),
         },
       ],
     };
   }
+
+  if (!args.walletId) {
+    throw new Error('walletId is required for local chains (solana, bsc, arbitrum)');
+  }
+  if (!args.password) {
+    throw new Error('password is required to decrypt the stored private key');
+  }
   const entry = await getWalletEntry(args.walletId as string);
   const privateKey = await decryptWalletEntry(entry, args.password as string);
   const chainWallet = getChainWallet(entry.chain);
-  const result = await chainWallet.signTransaction(privateKey, args.transaction);
+  const result = await chainWallet.signTransaction(privateKey, normalizeLocalTx(args.transaction));
   return {
     content: [
       {
@@ -449,22 +566,38 @@ async function handleSignTransaction(args: Record<string, any>): Promise<ToolRes
 }
 
 async function handleSendTransaction(args: Record<string, any>): Promise<ToolResponse> {
-  const transaction = args.transaction;
-  if (transaction?.unsignedTxBase64 && !args.walletId) {
-    const result = await sendDynamicTx(transaction.unsignedTxBase64);
+  if (isAmbientRequest(args)) {
+    const result = await sendAmbientTransaction(extractAmbientTx(args));
     return {
       content: [
         {
           type: 'text',
-          text: JSON.stringify(result, null, 2),
+          text: JSON.stringify(
+            {
+              chain: 'ambient',
+              address: result.address,
+              signature: result.signature,
+              txid: result.txid,
+              signedTx: result.signedTx,
+            },
+            null,
+            2,
+          ),
         },
       ],
     };
   }
+
+  if (!args.walletId) {
+    throw new Error('walletId is required for local chains (solana, bsc, arbitrum)');
+  }
+  if (!args.password) {
+    throw new Error('password is required to decrypt the stored private key');
+  }
   const entry = await getWalletEntry(args.walletId as string);
   const privateKey = await decryptWalletEntry(entry, args.password as string);
   const chainWallet = getChainWallet(entry.chain);
-  const result = await chainWallet.sendTransaction(privateKey, args.transaction);
+  const result = await chainWallet.sendTransaction(privateKey, normalizeLocalTx(args.transaction));
   return {
     content: [
       {
@@ -485,7 +618,13 @@ async function handleList(args: Record<string, any>): Promise<ToolResponse> {
   const filtered = chainFilter
     ? entries.filter((e) => e.chain === chainFilter)
     : entries;
-  const list = filtered.map((e) => ({
+  const list: Array<{
+    walletId: string;
+    chain: string;
+    address: string;
+    createdAt: string;
+    label?: string;
+  }> = filtered.map((e) => ({
     walletId: e.id,
     chain: e.chain,
     address: e.address,
@@ -499,7 +638,7 @@ async function handleList(args: Record<string, any>): Promise<ToolResponse> {
     if (session) {
       if (!chainFilter || chainFilter === 'ambient') {
         list.push({
-          walletId: 'dynamic-ambient',
+          walletId: DYNAMIC_WALLET_ID,
           chain: 'ambient',
           address: session.walletMetadata.accountAddress,
           createdAt: session.createdAt,
@@ -507,14 +646,17 @@ async function handleList(args: Record<string, any>): Promise<ToolResponse> {
         });
       }
     }
-  } catch {}
-  
+  } catch {
+    // A corrupt or unreadable session file must not break wallet listing.
+  }
+
   return {
     content: [{ type: 'text', text: JSON.stringify({ wallets: list, count: list.length }, null, 2) }],
   };
 }
 
 async function handleDelete(args: Record<string, any>): Promise<ToolResponse> {
+  assertLocalWalletId(args.walletId);
   const entry = await getWalletEntry(args.walletId as string);
   await deleteWallet(entry.id, args.password as string);
   return {
@@ -528,16 +670,17 @@ async function handleDelete(args: Record<string, any>): Promise<ToolResponse> {
 }
 
 async function handleGetBalance(args: Record<string, any>): Promise<ToolResponse> {
-  if (!args.walletId || args.walletId === 'dynamic-ambient') {
+  if (!args.walletId || args.walletId === DYNAMIC_WALLET_ID) {
     const session = await loadSession();
     if (session) {
-      const balance = await getAmbientBalance();
+      const balance = await getAmbientBalance(session.walletMetadata.accountAddress);
       return {
         content: [
           {
             type: 'text',
             text: JSON.stringify(
               {
+                walletId: DYNAMIC_WALLET_ID,
                 address: session.walletMetadata.accountAddress,
                 chain: 'ambient',
                 balance,
@@ -556,7 +699,7 @@ async function handleGetBalance(args: Record<string, any>): Promise<ToolResponse
   const entry = await getWalletEntry(args.walletId as string);
   const chainWallet = getChainWallet(entry.chain);
   const balance = await chainWallet.getBalance(entry.address);
-  const { nativeToken, wrappedNativeToken } = chainWallet.config;
+  const { nativeToken } = chainWallet.config;
   return {
     content: [
       {
@@ -568,7 +711,6 @@ async function handleGetBalance(args: Record<string, any>): Promise<ToolResponse
             chain: entry.chain,
             balance,
             token: nativeToken,
-            ...(wrappedNativeToken ? { wrappedToken: wrappedNativeToken } : {}),
           },
           null,
           2,

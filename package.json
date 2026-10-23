@@ -1,7 +1,7 @@
 {
   "name": "wallet-mcp-server",
   "version": "0.1.0",
-  "description": "Multi-chain wallet MCP server for the GetOnyx DEX stack (Ambient, Solana, BSC, Arbitrum One) — key management, signing and broadcasting",
+  "description": "Multi-chain wallet MCP server for the GetOnyx DEX stack (Ambient via the Dynamic online wallet, plus local Solana, BSC and Arbitrum One keys) — key management, signing and broadcasting",
   "type": "module",
   "license": "MIT",
   "author": "GetOnyx",
@@ -36,6 +36,8 @@
     "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
+    "@dynamic-labs-wallet/node": "^1.1.48",
+    "@dynamic-labs-wallet/node-svm": "^1.1.48",
     "@modelcontextprotocol/sdk": "^0.5.0",
     "@noble/curves": "^1.0.0",
     "@solana/web3.js": "^1.98.0",
