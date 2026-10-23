@@ -89,7 +89,15 @@ export async function verifyEmailOtp(params: {
     publicKeyHex,
     email: params.email,
     createdAt: new Date().toISOString(),
-    expiresAt: result.expiresAt ? new Date(result.expiresAt).toISOString() : undefined,
+    expiresAt: result.expiresAt
+      ? typeof result.expiresAt === 'string'
+        ? Date.parse(result.expiresAt) > 0
+          ? new Date(result.expiresAt).toISOString()
+          : undefined
+        : typeof result.expiresAt === 'number' && result.expiresAt > 0
+        ? new Date(result.expiresAt).toISOString()
+        : undefined
+      : undefined,
     environmentId,
   };
 
